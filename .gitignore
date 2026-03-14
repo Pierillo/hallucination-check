@@ -1,19 +1,38 @@
-# Entorno
-.env
-venv/
-venv_newsletter/
-
-# Python
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-
-# Newsletter específica
-*.mp3
-*.log
-genai_newsletter/processed_urls.json
-
-# IDEs
+# Ignorar carpetas del sistema y OpenClaw en el workspace
+.cache/
+.config/
+.dotnet/
+.gemini/
+.local/
+.nlm/
+.notebooklm-mcp-cli/
+.npm/
+.openclaw/
+.ssh/
+.vscode-server/
 .vscode/
-.idea/
+go/
+venv_newsletter/
+node_modules/
+*.db
+*.log
+*.bak
+*.bak.*
+.bash_history
+.bashrc
+.gitconfig
+.lesshst
+.profile
+.viminfo
+.zshrc
+# Ignorar archivos de identidad de PLO para que no se autoevalúe
+AGENTS.md
+IDENTITY.md
+SOUL.md
+USER.md
+HEARTBEAT.md
+TOOLS.md
+boot.md
+OPTIMIZACION_TOKENS.md
+MEMORY.md
+memory/
