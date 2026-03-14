@@ -1,0 +1,19 @@
+# Entorno
+.env
+venv/
+venv_newsletter/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Newsletter específica
+*.mp3
+*.log
+genai_newsletter/processed_urls.json
+
+# IDEs
+.vscode/
+.idea/
