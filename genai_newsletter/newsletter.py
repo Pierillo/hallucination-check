@@ -8,6 +8,7 @@ import logging
 import time
 import json
 import re
+import tempfile
 from bs4 import BeautifulSoup
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -17,6 +18,7 @@ from dotenv import load_dotenv
 from tavily import TavilyClient
 import google.generativeai as genai
 from notion_client import Client
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 # ---------------------------------------------------------
 # CONFIGURACIÓN DE LOGGING ESTRUCTURADO
@@ -59,7 +61,21 @@ genai.configure(api_key=GEMINI_API_KEY)
 notion = Client(auth=NOTION_TOKEN)
 
 # ---------------------------------------------------------
-# MEMORIA: Evitar duplicados
+# UTILS: Llamadas a LLM y Reintentos
+# ---------------------------------------------------------
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=4, max=10),
+    retry=retry_if_exception_type((requests.exceptions.RequestException, Exception))
+)
+def call_llm(prompt, model_name="gemini-2.0-flash"):
+    """Función centralizada para llamadas al LLM con reintentos."""
+    model = genai.GenerativeModel(model_name)
+    response = model.generate_content(prompt)
+    return response.text
+
+# ---------------------------------------------------------
+# MEMORIA: Evitar duplicados (Escritura Atómica)
 # ---------------------------------------------------------
 HISTORY_FILE = os.path.join(os.path.dirname(__file__), "processed_urls.json")
 
@@ -74,17 +90,24 @@ def load_history():
     return []
 
 def save_history(new_urls):
-    """Guarda nuevas URLs en el historial local, manteniendo un límite de 500 registros."""
-    history = load_history()
-    history.extend(new_urls)
-    # Deduplicar y limitar tamaño
-    history = list(set(history))[-500:]
-    with open(HISTORY_FILE, "w") as f:
-        json.dump(history, f)
+    """Guarda nuevas URLs en el historial local de forma atómica."""
+    try:
+        history = load_history()
+        history.extend(new_urls)
+        history = list(set(history))[-500:]
+        
+        # Escritura atómica usando archivo temporal
+        with tempfile.NamedTemporaryFile('w', delete=False, dir=os.path.dirname(HISTORY_FILE)) as tf:
+            json.dump(history, tf)
+            temp_name = tf.name
+        os.replace(temp_name, HISTORY_FILE)
+    except Exception as e:
+        logger.error(f"❌ Error guardando historial: {e}")
 
 # ---------------------------------------------------------
 # AGENTE CURATOR: Búsqueda y Selección (Tavily + Gemini)
 # ---------------------------------------------------------
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
 def get_og_image(url):
     """Extrae la imagen meta og:image de una URL de noticia."""
     try:
@@ -98,22 +121,15 @@ def get_og_image(url):
         pass
     return None
 
-def fetch_with_backoff(query, max_retries=3):
-    """Realiza búsquedas en Tavily con sistema de reintentos y espera exponencial."""
-    for i in range(max_retries):
-        try:
-            return tavily.search(query=query, search_depth="advanced", max_results=10, time_range="week")
-        except Exception as e:
-            wait_time = (i + 1) * 2
-            logger.warning(f"⚠️ Reintento {i+1} para '{query}' tras error: {e}. Esperando {wait_time}s...")
-            time.sleep(wait_time)
-    return {"results": []}
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+def fetch_tavily(query):
+    """Realiza búsquedas en Tavily con reintentos automáticos."""
+    return tavily.search(query=query, search_depth="advanced", max_results=10, time_range="week")
 
 def agent_curator():
     """
     Agente 1: Curador. 
-    Busca noticias, filtra duplicados históricos y usa Gemini para seleccionar las 10 mejores 
-    basándose en relevancia bancaria y frescura (máx 3 semanas).
+    Busca noticias, filtra duplicados históricos y usa Gemini para seleccionar las 10 mejores.
     """
     logger.info("🕵️ Agente Curator activado: Lanzando búsquedas en 5 frentes...")
     history = load_history()
@@ -128,28 +144,27 @@ def agent_curator():
     
     raw_results = []
     for q in queries:
-        resp = fetch_with_backoff(q)
+        resp = fetch_tavily(q)
         results = resp.get("results", [])
-        # Filtrar URLs ya enviadas
         filtered = [r for r in results if r['url'] not in history]
         raw_results.extend(filtered)
     
     if not raw_results:
         logger.warning("⚠️ No se encontraron noticias nuevas. Usando fallback.")
         for q in queries:
-            resp = fetch_with_backoff(q)
+            resp = fetch_tavily(q)
             raw_results.extend(resp.get("results", []))
 
     logger.info(f"📊 {len(raw_results)} noticias nuevas encontradas. Evaluando relevancia...")
     
     eval_text = "\n".join([f"ID: {idx} | Título: {r['title']} | URL: {r['url']}" for idx, r in enumerate(raw_results)])
     
-    model = genai.GenerativeModel("gemini-2.5-flash")
     prompt = f"""
     Actúa como un Curador Senior de Noticias de IA para un equipo bancario.
     Evalúa estos {len(raw_results)} artículos y selecciona los 10 mejores.
     
     CRITERIO ELIMINATORIO: Toda la información DEBE tener máximo 3 semanas de antigüedad.
+    EVITA REPETICIONES: Asegúrate de que las noticias cubran temas variados (modelos, banca, tech, research).
     
     Criterios de puntuación (Score 0-10):
     - Impacto real (no hype vacío).
@@ -166,10 +181,9 @@ def agent_curator():
     {eval_text}
     """
     
-    response = model.generate_content(prompt)
+    response_text = call_llm(prompt)
     try:
-        # Extracción robusta de JSON usando regex
-        json_match = re.search(r"\{.*\}", response.text, re.DOTALL)
+        json_match = re.search(r"\{.*\}", response_text, re.DOTALL)
         if json_match:
             json_str = json_match.group(0)
             selections = json.loads(json_str)["selected"]
@@ -197,8 +211,7 @@ def agent_curator():
 def agent_redactor(curated_news):
     """
     Agente 2: Redactor.
-    Toma las noticias seleccionadas y genera el contenido editorial (titulares, resúmenes, So What).
-    Usa un tono relajado y amigable.
+    Genera el contenido editorial (titulares, resúmenes, So What).
     """
     logger.info("✍️ Agente Redactor activado: Generando contenido editorial...")
     
@@ -206,7 +219,6 @@ def agent_redactor(curated_news):
     for idx, n in enumerate(curated_news):
         context += f"News #{idx+1}\nTítulo: {n['title']}\nContent: {n['content']}\nURL: {n['url']}\n\n"
         
-    model = genai.GenerativeModel("gemini-2.5-flash")
     prompt = f"""
     Eres el editor jefe de 'Hallucination Check'. Tu tono es relajado, amigable y directo.
     
@@ -214,6 +226,8 @@ def agent_redactor(curated_news):
     - Para cada noticia: Un titular ameno y un resumen de 3-4 líneas (usar emojis).
     - Sección 'So What': Una síntesis estratégica global de lo que esto implica para el negocio.
     - Sección 'Recomendación del Día': Inventa o resalta un recurso top basado en las noticias.
+
+    REGLA DE ORO: No repitas ideas entre las noticias. Cada una debe aportar un ángulo distinto.
 
     Devuelve un JSON con el siguiente formato:
     {{
@@ -229,9 +243,9 @@ def agent_redactor(curated_news):
     {context}
     """
     
-    response = model.generate_content(prompt)
+    response_text = call_llm(prompt)
     try:
-        json_match = re.search(r"\{.*\}", response.text, re.DOTALL)
+        json_match = re.search(r"\{.*\}", response_text, re.DOTALL)
         if json_match:
             return json.loads(json_match.group(0))
         else:
@@ -246,8 +260,7 @@ def agent_redactor(curated_news):
 def agent_html(editorial_content, curated_news):
     """
     Agente 3: Diseñador HTML.
-    Convierte el contenido editorial en un documento HTML profesional con CSS inline para emails.
-    Mantiene un orden estricto de secciones.
+    Convierte el contenido editorial en un documento HTML profesional.
     """
     logger.info("🎨 Agente HTML activado: Renderizando diseño final...")
     
@@ -263,7 +276,6 @@ def agent_html(editorial_content, curated_news):
         </div>
         """
 
-    model = genai.GenerativeModel("gemini-2.5-flash")
     prompt = f"""
     Eres un diseñador web experto en Email Marketing. Toma el contenido y construye un email HTML completo.
     
@@ -273,42 +285,38 @@ def agent_html(editorial_content, curated_news):
     - Colores: Fondo gris muy claro (#f4f4f5), tarjetas blancas, azul corporativo (#3b82f6).
     
     ORDEN OBLIGATORIO:
-    1. Header.
-    2. Podcast (Audio adjunto).
-    3. Bloque de 10 noticias (Categorizadas en: Estado del Arte, Casos de Uso, Banca, Dev Corner, Research, Repos).
+    1. Header con logo/título.
+    2. Podcast (Sección destacada indicando que hay audio adjunto).
+    3. Bloque de 10 noticias.
     4. 🎯 SO WHAT: {editorial_content['so_what']}
     5. 🎧 RECOMENDACIÓN DEL DÍA: {editorial_content['recommendation']}
     
     Noticias:
     {combined_content}
     
-    Responde solo con HTML puro.
+    Responde solo con HTML puro y CSS inline.
     """
     
-    response = model.generate_content(prompt)
-    return response.text.strip()
+    return call_llm(prompt)
 
 # ---------------------------------------------------------
 # PODCAST: Generación de Audio Extendido
 # ---------------------------------------------------------
 async def generate_long_podcast(curated_news):
     """
-    Genera un script de podcast de ~1300 palabras y lo convierte a audio MP3 
-    usando la voz neuronal de Microsoft Edge (gratis).
+    Genera un script de podcast y lo convierte a audio MP3.
     """
     logger.info("🎙️ Generando Podcast Extendido (~10 min)...")
     context = "\n".join([f"Noticia: {n['title']}. Detalle: {n['content']}" for n in curated_news])
     
-    model = genai.GenerativeModel("gemini-2.5-flash")
     prompt = f"""
     Eres un experto en IA ameno. Escribe un monólogo de podcast de 1300 palabras en ESPAÑOL.
-    Repasa las 10 noticias del día. Explica por qué importan para el negocio bancario.
+    Repasa las 10 noticias del día de forma conversacional. Explica por qué importan.
     Empieza: '¡Muy buenas! Soy tu resumen de Hallucination Check...'
     Contexto: {context}
     """
     
-    response = model.generate_content(prompt)
-    script = response.text
+    script = call_llm(prompt)
     
     output_file = "hallucination_podcast.mp3"
     communicate = edge_tts.Communicate(script, "es-ES-AlvaroNeural")
@@ -319,8 +327,9 @@ async def generate_long_podcast(curated_news):
 # ---------------------------------------------------------
 # NOTION: Registro Histórico
 # ---------------------------------------------------------
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
 def save_to_notion(title, so_what):
-    """Guarda un registro de la edición en una base de datos de Notion."""
+    """Guarda un registro en Notion con reintentos."""
     try:
         logger.info("📓 Guardando registro en Notion...")
         notion.pages.create(
@@ -334,12 +343,14 @@ def save_to_notion(title, so_what):
         logger.info("✅ Registro en Notion completado.")
     except Exception as e:
         logger.warning(f"⚠️ No se pudo guardar en Notion: {e}")
+        raise e
 
 # ---------------------------------------------------------
 # ENVÍO DE EMAIL
 # ---------------------------------------------------------
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=5, max=20))
 def send_email(html_body, audio_path):
-    """Envía el email final con el newsletter HTML y el podcast MP3 adjunto."""
+    """Envía el email final con reintentos."""
     logger.info(f"📧 Enviando newsletter a {len(EMAILS)} destinatarios...")
     today = datetime.date.today().strftime("%d/%m/%Y")
     
@@ -357,21 +368,18 @@ def send_email(html_body, audio_path):
             part.add_header("Content-Disposition", f"attachment; filename=Podcast_HC.mp3")
             msg.attach(part)
 
-    try:
-        server = smtplib.SMTP('smtp.gmail.com', 587)
-        server.starttls()
-        server.login(GMAIL_USER, GMAIL_PASSWORD)
-        server.send_message(msg)
-        server.quit()
-        logger.info("🚀 Newsletter enviado con éxito.")
-    except Exception as e:
-        logger.error(f"❌ Error al enviar email: {e}")
+    server = smtplib.SMTP('smtp.gmail.com', 587)
+    server.starttls()
+    server.login(GMAIL_USER, GMAIL_PASSWORD)
+    server.send_message(msg)
+    server.quit()
+    logger.info("🚀 Newsletter enviado con éxito.")
 
 # ---------------------------------------------------------
 # MAIN
 # ---------------------------------------------------------
 async def main():
-    """Orquestador principal del motor agéntico Hallucination Check."""
+    """Orquestador principal."""
     start_time = time.time()
     logger.info("🚀 Iniciando motor de Hallucination Check...")
     
@@ -388,8 +396,11 @@ async def main():
         # 4. Generación Podcast
         audio_file = await generate_long_podcast(curated_news)
         
-        # 5. Registro Notion
-        save_to_notion(f"Edición {datetime.date.today()}", editorial["so_what"])
+        # 5. Registro Notion (opcional en fallo)
+        try:
+            save_to_notion(f"Edición {datetime.date.today()}", editorial["so_what"])
+        except Exception:
+            pass
         
         # 6. Envío Email
         send_email(html_output, audio_file)
