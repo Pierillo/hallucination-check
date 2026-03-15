@@ -21,7 +21,7 @@ from notion_client import Client
 # ---------------------------------------------------------
 # CONFIGURACIÓN DE LOGGING ESTRUCTURADO
 # ---------------------------------------------------------
-LOG_FILE = "genai_newsletter/newsletter.log"
+LOG_FILE = os.path.join(os.path.dirname(__file__), "newsletter.log")
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
@@ -61,7 +61,7 @@ notion = Client(auth=NOTION_TOKEN)
 # ---------------------------------------------------------
 # MEMORIA: Evitar duplicados
 # ---------------------------------------------------------
-HISTORY_FILE = "genai_newsletter/processed_urls.json"
+HISTORY_FILE = os.path.join(os.path.dirname(__file__), "processed_urls.json")
 
 def load_history():
     """Carga el historial de URLs procesadas desde un archivo JSON local."""
