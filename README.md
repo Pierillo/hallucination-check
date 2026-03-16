@@ -85,25 +85,13 @@ El script guarda cada edición en una base de datos de Notion. Asegúrate de:
 
 ---
 
-### 📊 Tabla Comparativa de Modelos de IA
-
-| Model           | Cost         | Speed (Tokens/sec) | Context Window | Fine-tunability | Notes                                     |
-| :-------------- | :----------- | :----------------- | :-------------- | :---------------------------------------- | ------------- |
-| Gemini 2.5 Flash | Free Tier    | High               | 1M tokens       | Recommended for cost-effectiveness        |
-| GPT-4           | $0.01/100k   | Moderate           | 128k tokens     | Powerful; higher cost                     |
-| Claude 3 Opus   | $15/M tokens | High               | 200k tokens     | Strong reasoning, excels at long context |
-
-*Disclaimer: Costs and specifications are approximate and may change. Always refer to official documentation for the latest information.*
-
----
-
 ### ❓ Preguntas Frecuentes (FAQs)
 
 - **¿De qué trata el proyecto?**
   El proyecto es un agregador automatizado de noticias de IA para profesionales bancarios. El objetivo es filtrar el hype y mantenerlos informados sobre tendencias relevantes en IA, ahorrándoles tiempo.
 
 - **¿Qué modelos de IA se utilizan?**
-  Se utiliza Gemini 2.5 Flash para la generación de contenido y la API de Tavily para la búsqueda de noticias.
+  Se utiliza Gemini 2.5 flash (a traves de openrouter) para la generación de contenido y la API de Tavily para la búsqueda de noticias.
 
 - **¿Cuál es el propósito de los agentes?**
   Los agentes están diseñados para curar noticias, redactar el contenido en un formato editorial, renderizar el newsletter final en HTML, y generar un resumen en podcast.
@@ -145,7 +133,7 @@ El script guarda cada edición en una base de datos de Notion. Asegúrate de:
 ---------------------------------------------------------------------------
 MIT License
 
-Copyright (c) 2026 Piero Villalobos
+Copyright (c) 2026 Piero Anselmi
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
