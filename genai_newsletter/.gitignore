@@ -1,2 +1,28 @@
+# Entorno
 .env
-data/
+venv/
+venv_newsletter/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Newsletter
+*.mp3
+*.db
+*.log
+processed_urls.json
+genai_newsletter/processed_urls.json
+
+# IDEs
+.vscode/
+.idea/
+
+# Backups
+*.bak
+*.bak.*
+
+# Node
+node_modules/
