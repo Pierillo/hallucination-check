@@ -4,49 +4,111 @@
 
 > "Tu dosis matutina de realidad para filtrar el hype de la IA antes del primer café."
 
-**Hallucination Check** es un motor agéntico modular diseñado para equipos bancarios y de estrategia que necesitan mantenerse al día con el vertiginoso mundo de la IA Generativa, filtrando el ruido irrelevante.
+**Hallucination Check** es un pipeline automatizado modular que curate, redacta y envía un newsletter diario de IA Generativa con audio MP3 — pensado para equipos bancarios y de estrategia que necesitan mantenerse al día sin perder horas buscando información.
+
+**Costo operativo:** ~S/ 0.10 al día (VPS + créditos de IA en tiers gratuitos).
 
 ---
 
-## 🏗️ Arquitectura Modular
+## 🏗️ Flujo del Pipeline
+```mermaid
+graph TD
+    A[Fuentes / Tavily] --> B{🕵️ Agente Curator}
+    B -->|Scoring de Relevancia| C[Top 10 Noticias]
+    C --> D{✍️ Agente Writer}
+    D --> E[DeepSeek V3 / Gemini 2.5 Flash]
+    E --> F{🎨 Renderer HTML}
+    C --> G{🎙️ Podcast Agent}
+    G --> H[Audio MP3 - Edge TTS]
+    F --> I[📧 Email + Notion]
+    H --> I
+```
 
-El sistema utiliza una arquitectura de agentes especializados encadenados, coordinados por un orquestador central:
+---
 
-1.  **🕵️ Agente Curator (`agents/curator.py`):** Lanza búsquedas con **Tavily API**, filtra duplicados históricos y evalúa relevancia (0-10).
-2.  **✍️ Agente Writer (`agents/writer.py`):** Genera contenido editorial con un tono ameno y directo.
-3.  **🎨 Agente Renderer (`agents/renderer.py`):** Diseña el newsletter en HTML profesional y optimizado.
-4.  **🎙️ Agente Podcast (`agents/podcast.py`):** Crea un monólogo ejecutivo de ~10 min (Edge TTS) adjunto como MP3.
+## 🤖 Agentes
+
+| Agente | Archivo | Función |
+|---|---|---|
+| 🕵️ Curator | `agents/curator.py` | Busca con Tavily, filtra duplicados y asigna score de relevancia (0–10) |
+| ✍️ Writer | `agents/writer.py` | Genera contenido editorial con tono directo y amigable |
+| 🎨 Renderer | `agents/renderer.py` | Diseña el newsletter en HTML optimizado para lectura rápida |
+| 🎙️ Podcast | `agents/podcast.py` | Crea un monólogo ejecutivo de ~10 min en español vía Edge TTS |
 
 **Modelos:**
-- **Primario:** `DeepSeek V3` (vía OpenRouter) para máxima precisión y razonamiento.
-- **Fallback:** `Gemini 2.5 Flash` (vía Google API) en caso de fallos o límites de cuota.
+- **Primario:** `DeepSeek V3` vía OpenRouter
+- **Fallback automático:** `Gemini 2.5 Flash` vía Google API
 
 ---
 
-## 🚀 Instalación y Uso
+## 🚀 Instalación
+```bash
+git clone https://github.com/Pierillo/hallucination-check.git
+cd hallucination-check
 
-1.  **Entorno Virtual:** Se recomienda usar el entorno preconfigurado `venv_newsletter`.
-    ```bash
-    source venv_newsletter/bin/activate
-    pip install -r requirements.txt
-    ```
+python3 -m venv venv_newsletter
+source venv_newsletter/bin/activate
+pip install -r requirements.txt
 
-2.  **Configuración:** Copia `.env.example` a `.env` y añade tus claves (OpenRouter, Gemini, Tavily, Gmail, Notion).
+cp .env.example .env
+nano .env  # Agrega tus credenciales
+```
 
-3.  **Ejecución:**
-    ```bash
-    python3 genai_newsletter/main.py
-    ```
+---
+
+## ⚙️ Variables de entorno
+```env
+# APIs
+TAVILY_API_KEY=your_tavily_key_here
+GEMINI_API_KEY=your_gemini_key_here
+OPENROUTER_API_KEY=your_openrouter_key_here
+
+# Email (Gmail SMTP)
+GMAIL_USER=your_email@gmail.com
+GMAIL_PASSWORD=your_16_char_app_password
+
+# Destinatarios (separados por coma)
+EMAILS=email1@example.com,email2@example.com
+
+# Notion Integration (opcional)
+NOTION_TOKEN=your_notion_internal_token_here
+NOTION_DATABASE_ID=your_database_id_here
+```
+
+---
+
+## 💻 Uso
+
+### Ejecución manual
+```bash
+python3 genai_newsletter/main.py
+```
+
+### Automatización en VPS (cron job)
+
+Para recibirlo todos los días a las 8:00 AM:
+```bash
+0 8 * * * /ruta/al/venv_newsletter/bin/python3 /ruta/al/proyecto/genai_newsletter/main.py >> /ruta/al/proyecto/genai_newsletter/newsletter.log 2>&1
+```
 
 ---
 
 ## 🆘 Troubleshooting
 
-- **Error 429 (Quota Exceeded):** El sistema intentará automáticamente el fallback a Gemini si OpenRouter falla.
-- **Notion 401 Unauthorized:** Verifica tu token de integración. El flujo continuará aunque Notion falle para asegurar el envío del email.
+| Error | Causa | Solución |
+|---|---|---|
+| `429 Quota Exceeded` | Límite de OpenRouter o Gemini | El sistema activa el fallback automáticamente |
+| `Gmail SMTP Error` | Contraseña incorrecta | Usa una App Password con verificación en 2 pasos activa |
+| `Notion 401 Unauthorized` | Token inválido o BD no compartida | El flujo continúa igual — solo falla el registro en Notion |
 
 ---
 
 ## 🤝 Contribución
 
-¡Agradecemos tus contribuciones! El flujo modular facilita añadir nuevos agentes o utilidades en las carpetas `agents/` y `utils/`.
+El diseño modular facilita extender el pipeline. Para agregar nuevos agentes o utilidades, usa las carpetas `agents/` y `utils/`.
+
+---
+
+## 📄 Licencia
+
+MIT — úsalo, modifícalo y compártelo libremente.
